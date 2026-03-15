@@ -98,6 +98,7 @@ int CoolingStartingPowerPercentageCache = -1;
 int CoolingMaximumPowerPercentageCache = 101;
 double KpCache  = 0.0;
 
+bool skipSspo = false;
 
 // timer counter
 // timer can only count <1000s
@@ -126,7 +127,81 @@ Fortunately Programnyj driver buffer it allows (in the program up to 24 MB!) To 
  Get_USB_Device_QueueStatus(CAM8A);
  return FT_Q_Bytes;
 }*/
+int ftdi_read_data_modified ( struct ftdi_context *ftdi, unsigned char *buf, int size )
+{
+    const int uSECPERSEC = 1000000;
+    const int uSECPERMILLISEC = 1000;
 
+    int offset;
+    int result;
+    int last_report_offset = 0;
+    struct timespec tm;
+    tm.tv_sec = 0;
+    tm.tv_nsec = 1000L;
+
+    struct timeval startTime;
+    struct timeval timeout;
+    struct timeval now;
+    struct timeval last_report;
+
+    gettimeofday ( &startTime, NULL );
+    gettimeofday ( &last_report, NULL );
+
+    timeout.tv_sec = startTime.tv_sec + ftdi->usb_read_timeout / uSECPERMILLISEC;
+    timeout.tv_usec = startTime.tv_usec + ( ( ftdi->usb_read_timeout % uSECPERMILLISEC ) * uSECPERMILLISEC );
+    if ( timeout.tv_usec >= uSECPERSEC ) {
+        timeout.tv_sec++;
+        timeout.tv_usec -= uSECPERSEC;
+    }
+
+    offset = 0;
+    result = 0;
+
+    fprintf ( stderr, "ftdi_read_data_modified: starting, expecting %d bytes, timeout=%dms\n",
+              size, ftdi->usb_read_timeout );
+
+    while ( size > 0 ) {
+        result = ftdi_read_data ( ftdi, buf+offset, size );
+        if ( result < 0 ) {
+            fprintf ( stderr,"Read failed -- error (%d)\n", result );
+            break;
+        }
+        if ( result == 0 ) {
+            gettimeofday ( &now, NULL );
+            // Print progress every second
+            long elapsed_report = (now.tv_sec - last_report.tv_sec) * 1000000
+                                + (now.tv_usec - last_report.tv_usec);
+            if ( elapsed_report >= 1000000 ) {
+                long elapsed_total = (now.tv_sec - startTime.tv_sec) * 1000000
+                                   + (now.tv_usec - startTime.tv_usec);
+                int bytes_this_second = offset - last_report_offset;
+                fprintf ( stderr, "  reading: %d / %d bytes (%.1f%%) elapsed=%.1fs rate=%d bytes/s\n",
+                          offset, offset+size,
+                          100.0 * offset / (offset+size),
+                          elapsed_total / 1000000.0,
+                          bytes_this_second );
+                last_report = now;
+                last_report_offset = offset;
+            }
+            if ( now.tv_sec > timeout.tv_sec || ( now.tv_sec == timeout.tv_sec && now.tv_usec > timeout.tv_usec ) ) {
+                fprintf ( stderr,"Read failed -- timeout %d \n", offset );
+                fprintf ( stderr,"Padding %d missing bytes with zeros\n", size );
+                memset ( buf+offset, 0, size );
+                offset += size;
+                size = 0;
+                break;
+            }
+            nanosleep ( &tm, NULL );
+            continue;
+        }
+        size -= result;
+        offset += result;
+    }
+    fprintf ( stderr, "ftdi_read_data_modified: done, read %d bytes\n", offset );
+    return offset;
+}
+
+/*
 int ftdi_read_data_modified ( struct ftdi_context *ftdi, unsigned char *buf, int size )
 {
     const int uSECPERSEC = 1000000;
@@ -164,8 +239,17 @@ int ftdi_read_data_modified ( struct ftdi_context *ftdi, unsigned char *buf, int
         }
         if ( result == 0 ) {
             gettimeofday ( &now, NULL );
+            //if ( now.tv_sec > timeout.tv_sec || ( now.tv_sec == timeout.tv_sec && now.tv_usec > timeout.tv_usec ) ) {
+            //    fprintf ( stderr,"Read failed -- timeout %d \n",offset );
+            //    break;
+            //}
             if ( now.tv_sec > timeout.tv_sec || ( now.tv_sec == timeout.tv_sec && now.tv_usec > timeout.tv_usec ) ) {
                 fprintf ( stderr,"Read failed -- timeout %d \n",offset );
+                // Pad remaining bytes with zero
+                fprintf ( stderr,"Padding %d missing bytes with zeros\n", size );
+                memset ( buf+offset, 0, size );
+                offset += size;
+                size = 0;
                 break;
             }
             nanosleep ( &tm, NULL ); //sleep for 1 microsecond
@@ -176,7 +260,7 @@ int ftdi_read_data_modified ( struct ftdi_context *ftdi, unsigned char *buf, int
     }
     return offset;
 }
-
+*/
 void sspi ( void )
 {
     //fprintf(stderr,"--sspi\n");
@@ -233,7 +317,7 @@ void sspo ( void )
     //fprintf ( stderr,"--sspo siout (%04X)\n",siout);
 
 }
-
+/*
 void Spi_comm ( uint8_t comm, uint16_t param )
 {
     //fprintf(stderr,"--Spi_comm\n");
@@ -246,6 +330,16 @@ void Spi_comm ( uint8_t comm, uint16_t param )
     sspi();
     sspo();
     usleep ( 20*1000 );
+}*/
+void Spi_comm(uint8_t comm, uint16_t param) {
+    ftdi_usb_purge_rx_buffer(CAM8B);
+    ftdi_usb_purge_tx_buffer(CAM8B);
+    siin[0]=comm;
+    siin[1]=(param & 0xFF00) >> 8;
+    siin[2]=(param & 0x00FF);
+    sspi();
+    if (!skipSspo) sspo();
+    usleep(20*1000);
 }
 
 uint16_t swap ( uint16_t x )
@@ -407,10 +501,17 @@ void readframe ( void )
     ftdi_usb_purge_rx_buffer ( CAM8A );
     //ftdi_usb_purge_tx_buffer ( CAM8B );
     //comread();
-
     pthread_t t1;
-    pthread_create ( &t1, NULL, posExecute, NULL );
+
+    ftdi_usb_purge_rx_buffer(CAM8A);
+    ftdi_usb_purge_tx_buffer(CAM8A);
+    usleep(5000);  // 5ms settling time
+    pthread_create(&t1, NULL, posExecute, NULL);
+
+    skipSspo = true;   // don't read response during frame transfer
     Spi_comm ( 0x1B,0 ); //$ffff
+    skipSspo = false;
+    usleep(10000);  // 10ms for camera to start clocking out pixels
     //pthread_detach ( t1 );
     pthread_join ( t1,NULL );
     //fprintf ( stderr,"--readframe -- Done !\n" );
@@ -488,7 +589,7 @@ bool cameraConnect()
         CAM8A->usb_write_timeout=100;
         CAM8B->usb_write_timeout=100;
         //ftdi_read_data_set_chunksize(CAM8A,65536);
-        ftdi_read_data_set_chunksize ( CAM8A, 1<<14 );
+        ftdi_read_data_set_chunksize ( CAM8A, 1<<15 );
         fprintf ( stderr,"libftdi BRA=%d BRB=%d TA=%d TB=%d CSA=%d \n",CAM8A->baudrate,CAM8B->baudrate,CAM8A->usb_read_timeout,CAM8B->usb_write_timeout,CAM8A->readbuffer_chunksize );
 
 //Purge
@@ -514,6 +615,7 @@ bool cameraConnect()
         // Remove the 2 bytes that have arisen after the reset
         if ( ftdi_usb_purge_rx_buffer ( CAM8A ) <0 ) fprintf ( stderr,"libftdi error purge RX interface A\n" );
         mBin=0;
+
     }
     isConnected = FT_flag;
     errorReadFlag=false;

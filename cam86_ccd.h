@@ -31,10 +31,10 @@ public:
 
     bool ISNewNumber ( const char *dev, const char *name, double values[], char *names[], int n );
     bool ISNewSwitch ( const char *dev, const char *name, ISState *states, char *names[], int n );
-    IPState GuideNorth(unsigned int) {}
-    IPState GuideSouth(unsigned int) {}
-    IPState GuideEast(unsigned int) {}
-    IPState GuideWest(unsigned int) {}
+    IPState GuideNorth(unsigned int) { return IPS_OK; }
+    IPState GuideSouth(unsigned int) { return IPS_OK; }
+    IPState GuideEast(unsigned int)  { return IPS_OK; }
+    IPState GuideWest(unsigned int)  { return IPS_OK; }
     void GuideComplete(INDI_EQ_AXIS axis) {}
 
 

@@ -243,7 +243,7 @@ bool Cam86CCD::Connect()
         cameraSetGain ( 0 );
         IDMessage ( getDeviceName(), "Cam86 connected successfully!\n" );
         ;
-        cameraSetReadingTime ( 10 );
+        cameraSetReadingTime ( 0 );
         //cameraSetCoolerDuringReading ( true );
         return true;
     }
@@ -352,10 +352,10 @@ bool Cam86CCD::initProperties()
 
 
     // We set the CCD capabilities
-    uint32_t cap = CCD_CAN_ABORT | CCD_CAN_BIN | CCD_CAN_SUBFRAME | CCD_HAS_BAYER | CCD_HAS_COOLER;
+    uint32_t cap = CCD_CAN_ABORT | CCD_CAN_BIN | CCD_CAN_SUBFRAME | CCD_HAS_BAYER;
     //uint32_t cap = CCD_CAN_ABORT | CCD_CAN_BIN | CCD_CAN_SUBFRAME | CCD_HAS_COOLER;
     SetCCDCapability ( cap );
-    IUSaveText ( &BayerT[2], "RGGB" );
+    IUSaveText ( &BayerTP[2], "RGGB" );
     // Add Debug, Simulator, and Configuration controls
     addAuxControls();
 
@@ -429,22 +429,11 @@ void Cam86CCD::setupParams()
     nbuf+=512;                      //  leave a little extra at the end
     PrimaryCCD.setFrameBufferSize ( nbuf );
 
-    bool coolerOn=(cameraGetCoolerPower()>0);
-    CoolerS[0].s = coolerOn ? ISS_ON : ISS_OFF;
-    CoolerS[1].s = coolerOn ? ISS_OFF : ISS_ON;
-    CoolerSP.s = IPS_OK;
+    // Temperature/cooler initialisation disabled - no cooling hardware in use
+    CoolerS[0].s = ISS_OFF;
+    CoolerS[1].s = ISS_ON;
+    CoolerSP.s = IPS_IDLE;
     IDSetSwitch(&CoolerSP, NULL);
-
-    double temperature;
-    temperature = CameraGetTemp();
-    DEBUGF(INDI::Logger::DBG_SESSION, "The CCD Temperature is %f.", temperature);
-
-    TemperatureN[0].value = temperature;			/* CCD chip temperatre (degrees C) */
-    IDSetNumber(&TemperatureNP, NULL);
-
-    cameraSetCoolingStartingPowerPercentage ( 100 );
-    cameraSetCoolingMaximumPowerPercentage ( 100 );
-    cameraSetPIDproportionalGain ( 0.04 );
 
 }
 
@@ -486,17 +475,8 @@ bool Cam86CCD::AbortExposure()
 ***************************************************************************************/
 int Cam86CCD::SetTemperature ( double temperature )
 {
-    TemperatureRequest = temperature;
-
-    // If less than 0.1 of a degree, let's just return OK
-    if (fabs(temperature - TemperatureN[0].value) < 0.1)
-        return 1;
-
-    CameraCoolingOn();
-    CameraSetTemp ( (float) temperature );
-
-    // 0 means it will take a while to change the temperature
-    return 0;
+    // Cooling not in use
+    return 1;
 }
 
 /**************************************************************************************
@@ -553,56 +533,7 @@ void Cam86CCD::TimerHit()
 
     }
 
-    // TemperatureNP is defined in INDI::CCD
-    //if ((TemperatureUpdateCounter++ > TEMPERATURE_UPDATE_FREQ) && !InExposure)
-    if ( ( TemperatureUpdateCounter++ > TEMPERATURE_UPDATE_FREQ ) )
-    {
-        TemperatureUpdateCounter = 0;
-        currentCCDTemperature = CameraGetTemp();
-        float tempDHT=CameraGetTempDHT();
-        float HUM=CameraGetHum();
-        float coolerpower = cameraGetCoolerPower();
-        float Kp = cameraGetPIDproportionalGain();
-        int coolerStart = cameraGetCoolingStartingPowerPercentage();
-        int coolerMax = cameraGetCoolingMaximumPowerPercentage();
-        float settemp = cameraGetSetTemp();
-
-        const double a = 17.27;
-        const double b = 237.7;
-        double dewpoint = 0;
-
-        double c = log ( HUM / 100 ) + a * tempDHT / ( b + tempDHT );
-        dewpoint = b * c / ( a - c );
-
-
-        IDMessage ( getDeviceName(), "CCD %.2f/%.2f°C Ext %.2f Hum %.2f DP %.1f CoolerPower %.2f Kp %.2f - %d-%d\n" , currentCCDTemperature,settemp,tempDHT,HUM,dewpoint,coolerpower,Kp,coolerStart,coolerMax );
-        TemperatureN[0].value =currentCCDTemperature;
-
-    }
-
-    switch ( TemperatureNP.s )
-    {
-    case IPS_IDLE:
-    case IPS_OK:
-        currentCCDTemperature = CameraGetTemp();
-        if ( fabs ( currentCCDTemperature - TemperatureN[0].value ) >= TEMP_THRESHOLD )
-        {
-            TemperatureN[0].value = currentCCDTemperature;
-            IDSetNumber ( &TemperatureNP, NULL );
-        }
-        break;
-
-    case IPS_BUSY:
-        TemperatureN[0].value = CameraGetTemp();
-        if (fabs(TemperatureN[0].value - TemperatureRequest) <= TEMP_THRESHOLD)
-            TemperatureNP.s = IPS_OK;
-        IDSetNumber(&TemperatureNP, NULL);
-
-        break;
-
-    case IPS_ALERT:
-        break;
-    }
+    // Temperature/cooler polling disabled - no cooling hardware in use
 
 
     SetTimer ( POLLMS );
@@ -683,4 +614,3 @@ void Cam86CCD::activateCooler(bool enable)
         IDSetSwitch(&CoolerSP, NULL);
     }
 }
-

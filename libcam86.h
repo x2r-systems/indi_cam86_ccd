@@ -28,7 +28,7 @@
 #define BRB 5
 #define CAM86_LATENCYA  20
 #define CAM86_LATENCYB  20
-#define CAM86_TIMERA    6000
+#define CAM86_TIMERA    2000
 #define CAM86_TIMERB    100
 
 #ifdef __cplusplus

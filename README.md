@@ -1,4 +1,8 @@
 # indi_cam86_ccd
+
+Updated for INDI Library: 2.1.9
+Tested on Raspberry Pi 1B running Trixie
+
 Indilib driver for CAM86 diy camera (Sony ICX453AQ)
 
 This project is based on Ukrainian telescope amateurs work
